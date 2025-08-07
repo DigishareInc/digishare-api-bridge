@@ -1,0 +1,21 @@
+{
+  "name": "api_bridge2",
+  "version": "1.0.0",
+  "description": "Digishare API Bridge using Elysia",
+  "main": "src/index.ts",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "build": "tsc",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["api", "bridge", "elysia", "webhook"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@types/node": "^24.2.0",
+    "elysia": "^1.3.8",
+    "typescript": "^5.9.2"
+  }
+}
