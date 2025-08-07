@@ -5,18 +5,18 @@ import { requestLogger, errorHandler, apiKeyAuth, logger } from './middleware';
 import { makeHttpRequest } from './utils';
 import { env } from './config';
 
-// const endpoints ={
-//     createTicket: `${env.TARGET_BASE_URL}/Api/Leads/CreateNewLead`,
-//     updateTicket: `${env.TARGET_BASE_URL}/Api/Leads/UpdateLead`,
-//     updateConversation: `${env.TARGET_BASE_URL}/Api/Conversations/UpdateConversation`,
-//     // createConversation: `${env.TARGET_BASE_URL}/Api/Conversations/CreateConversation`,
-// }
-
-const endpoints = {
-    createTicket: `${env.TARGET_BASE_URL}/setdata.php`,
-    updateTicket: `${env.TARGET_BASE_URL}/setdata.php`,
-    updateConversation: null,
+const endpoints ={
+    createTicket: `${env.TARGET_BASE_URL}/Api/Leads/CreateNewLead`,
+    updateTicket: `${env.TARGET_BASE_URL}/Api/Leads/UpdateLead`,
+    updateConversation: `${env.TARGET_BASE_URL}/Api/Conversations/UpdateConversation`,
+    // createConversation: `${env.TARGET_BASE_URL}/Api/Conversations/CreateConversation`,
 }
+
+// const endpoints = {
+//     createTicket: `${env.TARGET_BASE_URL}/setdata.php`,
+//     updateTicket: `${env.TARGET_BASE_URL}/setdata.php`,
+//     updateConversation: null,
+// }
 
 
 const app = new Elysia()
