@@ -1,0 +1,37 @@
+{
+  "name": "elysia-hybrid-queue",
+  "version": "1.0.0",
+  "description": "A powerful queue management plugin for Elysia with SQLite persistence, retry mechanisms, and web UI",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "test": "bun test"
+  },
+  "keywords": [
+    "elysia",
+    "queue",
+    "job",
+    "worker",
+    "sqlite",
+    "plugin",
+    "typescript"
+  ],
+  "author": "Adil CHBADA",
+  "license": "MIT",
+  "peerDependencies": {
+    "elysia": "^1.0.0"
+  },
+  "dependencies": {
+    "@elysiajs/cors": "^1.3.3",
+    "@elysiajs/html": "^1.3.1",
+    "hybrid-queue": "file:../hybrid-queue"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
+  },
+  "files": [
+    "README.md",
+    "package.json"
+  ]
+}
