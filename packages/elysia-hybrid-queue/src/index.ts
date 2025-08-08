@@ -1253,6 +1253,30 @@ function getAdminHTML(routePrefix: string): string {
         let currentFilter = 'all';
         let refreshInterval;
 
+        // Centralized fetch wrapper with 401 handling
+        async function apiRequest(url, options = {}) {
+            try {
+                const response = await fetch(url, options);
+                
+                // Check for 401 Unauthorized
+                if (response.status === 401) {
+                    console.warn('401 Unauthorized - redirecting to login');
+                    // Clear any existing intervals
+                    if (refreshInterval) {
+                        clearInterval(refreshInterval);
+                    }
+                    // Redirect to login page
+                    window.location.href = \`\${API_BASE.replace('/api', '')}/admin\`;
+                    return null;
+                }
+                
+                return response;
+            } catch (error) {
+                console.error('API request failed:', error);
+                throw error;
+            }
+        }
+
         // Initialize the application
         async function init() {
             await loadQueues();
@@ -1262,7 +1286,9 @@ function getAdminHTML(routePrefix: string): string {
         // Load all queues
         async function loadQueues() {
             try {
-                const response = await fetch(\`\${API_BASE}/queues\`);
+                const response = await apiRequest(\`\${API_BASE}/queues\`);
+                if (!response) return; // 401 handled by apiRequest
+                
                 const data = await response.json();
                 
                 if (data.success) {
@@ -1350,7 +1376,9 @@ function getAdminHTML(routePrefix: string): string {
             
             try {
                 const statusParam = currentFilter === 'all' ? '' : \`?status=\${currentFilter}\`;
-                const response = await fetch(\`\${API_BASE}/queues/\${currentQueue}/jobs\${statusParam}\`);
+                const response = await apiRequest(\`\${API_BASE}/queues/\${currentQueue}/jobs\${statusParam}\`);
+                if (!response) return; // 401 handled by apiRequest
+                
                 const data = await response.json();
                 
                 if (data.success) {
@@ -1414,9 +1442,11 @@ function getAdminHTML(routePrefix: string): string {
             if (!currentQueue) return;
             
             try {
-                const response = await fetch(\`\${API_BASE}/queues/\${currentQueue}/jobs/\${jobId}/retry\`, {
+                const response = await apiRequest(\`\${API_BASE}/queues/\${currentQueue}/jobs/\${jobId}/retry\`, {
                     method: 'POST'
                 });
+                if (!response) return; // 401 handled by apiRequest
+                
                 const data = await response.json();
                 
                 if (data.success) {
@@ -1440,9 +1470,11 @@ function getAdminHTML(routePrefix: string): string {
             }
             
             try {
-                const response = await fetch(\`\${API_BASE}/queues/\${currentQueue}/jobs/\${jobId}\`, {
+                const response = await apiRequest(\`\${API_BASE}/queues/\${currentQueue}/jobs/\${jobId}\`, {
                     method: 'DELETE'
                 });
+                if (!response) return; // 401 handled by apiRequest
+                
                 const data = await response.json();
                 
                 if (data.success) {
@@ -1476,7 +1508,9 @@ function getAdminHTML(routePrefix: string): string {
         // Load cleanup status
         async function loadCleanupStatus() {
             try {
-                const response = await fetch(\`\${API_BASE}/cleanup/status\`);
+                const response = await apiRequest(\`\${API_BASE}/cleanup/status\`);
+                if (!response) return; // 401 handled by apiRequest
+                
                 const data = await response.json();
                 
                 // Debug logging
@@ -1675,9 +1709,11 @@ function getAdminHTML(routePrefix: string): string {
         // Manual cleanup trigger
         async function triggerManualCleanup() {
             try {
-                const response = await fetch(\`\${API_BASE}/cleanup/manual\`, {
+                const response = await apiRequest(\`\${API_BASE}/cleanup/trigger\`, {
                     method: 'POST'
                 });
+                if (!response) return; // 401 handled by apiRequest
+                
                 const data = await response.json();
                 
                 if (data.success) {
@@ -1708,9 +1744,10 @@ function getAdminHTML(routePrefix: string): string {
         // Logout functionality
         async function logout() {
             try {
-                const response = await fetch(\`\${API_BASE.replace('/api', '')}/auth/logout\`, {
+                const response = await apiRequest(\`\${API_BASE.replace('/api', '')}/auth/logout\`, {
                     method: 'POST'
                 });
+                // Note: For logout, we don't need to check for 401 since we're logging out anyway
                 
                 // Redirect to login page regardless of response
                 window.location.href = \`\${API_BASE.replace('/api', '')}/admin\`;
