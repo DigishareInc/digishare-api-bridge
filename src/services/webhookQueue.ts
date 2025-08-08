@@ -1,4 +1,4 @@
-import { Queue, Worker, type JobHandler } from "hybrid-queue/src/index";
+import { Queue, Worker, type JobHandler } from "elysia-hybrid-queue";
 import {
   transformToCreateLead,
   transformToUpdateLead,

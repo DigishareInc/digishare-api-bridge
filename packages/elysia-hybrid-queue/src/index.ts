@@ -10,7 +10,8 @@ import {
   QueueOperationError, 
   CleanupError,
   createErrorResponse} from './errors';
-
+  
+export { Queue, Worker, type JobHandler } from "hybrid-queue";
 // Global cleanup service instance
 let cleanupService: CleanupService | null = null;
 
