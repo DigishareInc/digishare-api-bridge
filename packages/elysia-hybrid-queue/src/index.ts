@@ -1113,7 +1113,7 @@ function getAdminHTML(routePrefix: string): string {
                         <span class="text-5xl">🚀</span>
                         Queue Management
                     </h1>
-                    <p class="text-indigo-100 text-lg md:text-xl font-medium">Monitor and manage your hybrid queues with style</p>
+                    <p class="text-indigo-100 text-lg md:text-xl font-medium">Monitor and manage your queues</p>
                 </div>
             </div>
         </div>
