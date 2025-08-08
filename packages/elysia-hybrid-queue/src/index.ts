@@ -14,11 +14,79 @@ import {
 // Global cleanup service instance
 let cleanupService: CleanupService | null = null;
 
+// Global auth sessions store
+const authSessions = new Map<string, { expires: number }>();
+
 /**
  * Get the global cleanup service instance
  */
 function getCleanupService(): CleanupService | null {
   return cleanupService;
+}
+
+/**
+ * Generate a random session ID
+ */
+function generateSessionId(): string {
+  return Math.random().toString(36).substring(2) + Date.now().toString(36);
+}
+
+/**
+ * Clean expired sessions
+ */
+function cleanExpiredSessions(): void {
+  const now = Date.now();
+  for (const [sessionId, session] of authSessions.entries()) {
+    if (session.expires < now) {
+      authSessions.delete(sessionId);
+    }
+  }
+}
+
+/**
+ * Check if user is authenticated
+ */
+function isAuthenticated(request: Request, options: Required<HybridQueuePluginOptions>): boolean {
+  if (!options.auth.enabled) {
+    return true; // Auth disabled, allow access
+  }
+
+  // Clean expired sessions periodically
+  cleanExpiredSessions();
+
+  // Check for session cookie
+  const cookies = request.headers.get('cookie');
+  if (cookies) {
+    const sessionMatch = cookies.match(/queueAdminSession=([^;]+)/);
+    if (sessionMatch) {
+      const sessionId = sessionMatch[1];
+      const session = authSessions.get(sessionId);
+      if (session && session.expires > Date.now()) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Create authentication middleware
+ */
+function createAuthMiddleware(options: Required<HybridQueuePluginOptions>) {
+  return (request: Request) => {
+    if (!isAuthenticated(request, options)) {
+      return new Response(
+        JSON.stringify({ success: false, error: 'Authentication required' }),
+        {
+          status: 401,
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+    }
+  };
 }
 
 /**
@@ -76,7 +144,19 @@ export function hybridQueue(userOptions: Partial<HybridQueuePluginOptions> = {})
       // Add admin UI if enabled
       if (options.enableAdminUI) {
         groupedApp = groupedApp
-          .get('/admin', () => {
+          .get('/admin', ({ request }) => {
+            // Check authentication for admin UI
+            if (options.auth.enabled && !isAuthenticated(request, options)) {
+              return new Response(
+                getLoginHTML(options.routePrefix),
+                {
+                  headers: {
+                    'Content-Type': 'text/html'
+                  }
+                }
+              );
+            }
+            
             return new Response(
               getAdminHTML(options.routePrefix),
               {
@@ -88,15 +168,107 @@ export function hybridQueue(userOptions: Partial<HybridQueuePluginOptions> = {})
           });
       }
 
+      // Add authentication endpoints
+      groupedApp = groupedApp.group('/auth', (auth) => {
+        return auth
+          .post('/login', async ({ body, set }) => {
+            try {
+              const { adminKey } = body as { adminKey: string };
+              
+              if (!options.auth.enabled) {
+                return {
+                  success: false,
+                  error: 'Authentication is not enabled'
+                };
+              }
+              
+              if (!adminKey || adminKey !== options.auth.adminKey) {
+                set.status = 401;
+                return {
+                  success: false,
+                  error: 'Invalid admin key'
+                };
+              }
+              
+              // Create session
+              const sessionId = generateSessionId();
+              const expires = Date.now() + (options.auth.sessionTimeout || 3600000);
+              authSessions.set(sessionId, { expires });
+              
+              // Set session cookie
+              const maxAge = Math.floor((options.auth.sessionTimeout || 3600000) / 1000);
+              set.headers['Set-Cookie'] = `queueAdminSession=${sessionId}; HttpOnly; Path=${options.routePrefix}; Max-Age=${maxAge}`;
+              
+              return {
+                success: true,
+                message: 'Login successful'
+              };
+            } catch (error) {
+              set.status = 500;
+              return {
+                success: false,
+                error: 'Login failed'
+              };
+            }
+          })
+          
+          .post('/logout', ({ request, set }) => {
+            try {
+              // Get session from cookie
+              const cookies = request.headers.get('cookie');
+              if (cookies) {
+                const sessionMatch = cookies.match(/queueAdminSession=([^;]+)/);
+                if (sessionMatch) {
+                  const sessionId = sessionMatch[1];
+                  authSessions.delete(sessionId);
+                }
+              }
+              
+              // Clear session cookie
+              set.headers['Set-Cookie'] = `queueAdminSession=; HttpOnly; Path=${options.routePrefix}; Max-Age=0`;
+              
+              return {
+                success: true,
+                message: 'Logout successful'
+              };
+            } catch (error) {
+              set.status = 500;
+              return {
+                success: false,
+                error: 'Logout failed'
+              };
+            }
+          })
+          
+          .get('/status', ({ request }) => {
+            return {
+              success: true,
+              authenticated: isAuthenticated(request, options),
+              authEnabled: options.auth.enabled
+            };
+          });
+      })
+      
       // Add API endpoints if enabled
       if (options.enableAPI) {
         groupedApp = groupedApp.group('/api', (api) => {
+          // Apply auth middleware to API routes if auth is enabled
+          if (options.auth.enabled) {
+            api = api.derive(({ request }) => {
+              const authResult = createAuthMiddleware(options)(request);
+              if (authResult) {
+                throw authResult;
+              }
+              return {};
+            });
+          }
+          
           return api
             // Get all queues and their stats
             .get('/queues', () => {
               try {
                 const queueNames = Queue.getAllQueueNames();
-                const queues = queueNames.map(name => {
+                const queues = queueNames.map((name: string) => {
                   const queue = new Queue(name);
                   try {
                     const stats = queue.getStats();
@@ -692,6 +864,119 @@ export function hybridQueue(userOptions: Partial<HybridQueuePluginOptions> = {})
 }
 
 /**
+ * Generate the login HTML with dynamic route prefix
+ */
+function getLoginHTML(routePrefix: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Queue Admin Login - Hybrid Queue</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style type="text/tailwindcss">
+        @theme {
+            --color-primary: #4f46e5;
+            --color-primary-dark: #3730a3;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-900 mb-2 flex items-center justify-center gap-3">
+                <span class="text-3xl">🔐</span>
+                Admin Login
+            </h1>
+            <p class="text-gray-600">Enter your admin key to access the queue management interface</p>
+        </div>
+        
+        <form id="loginForm" class="space-y-6">
+            <div>
+                <label for="adminKey" class="block text-sm font-medium text-gray-700 mb-2">Admin Key</label>
+                <input 
+                    type="password" 
+                    id="adminKey" 
+                    name="adminKey" 
+                    required 
+                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                    placeholder="Enter your admin key"
+                >
+            </div>
+            
+            <button 
+                type="submit" 
+                id="loginBtn"
+                class="w-full bg-indigo-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-indigo-700 focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+                <span id="loginBtnText">Login</span>
+                <span id="loginBtnSpinner" class="hidden">
+                    <span class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></span>
+                    Logging in...
+                </span>
+            </button>
+        </form>
+        
+        <div id="errorMessage" class="hidden mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm"></div>
+    </div>
+    
+    <script>
+        const API_BASE = '${routePrefix}';
+        
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const adminKey = document.getElementById('adminKey').value;
+            const loginBtn = document.getElementById('loginBtn');
+            const loginBtnText = document.getElementById('loginBtnText');
+            const loginBtnSpinner = document.getElementById('loginBtnSpinner');
+            const errorMessage = document.getElementById('errorMessage');
+            
+            // Show loading state
+            loginBtn.disabled = true;
+            loginBtnText.classList.add('hidden');
+            loginBtnSpinner.classList.remove('hidden');
+            errorMessage.classList.add('hidden');
+            
+            try {
+                const response = await fetch(\`\${API_BASE}/auth/login\`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ adminKey })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Redirect to admin interface
+                    window.location.href = \`\${API_BASE}/admin\`;
+                } else {
+                    // Show error
+                    errorMessage.textContent = data.error || 'Login failed';
+                    errorMessage.classList.remove('hidden');
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                errorMessage.textContent = 'Network error. Please try again.';
+                errorMessage.classList.remove('hidden');
+            } finally {
+                // Reset loading state
+                loginBtn.disabled = false;
+                loginBtnText.classList.remove('hidden');
+                loginBtnSpinner.classList.add('hidden');
+            }
+        });
+        
+        // Focus on admin key input
+        document.getElementById('adminKey').focus();
+    </script>
+</body>
+</html>`;
+}
+
+/**
  * Generate the admin HTML with dynamic route prefix
  */
 function getAdminHTML(routePrefix: string): string {
@@ -710,6 +995,46 @@ function getAdminHTML(routePrefix: string): string {
             --color-success: #10b981;
             --color-warning: #f59e0b;
             --color-danger: #ef4444;
+        }
+        
+        :root {
+            /* Light theme variables */
+            --bg-primary: #ffffff;
+            --bg-secondary: #f8fafc;
+            --bg-tertiary: #f1f5f9;
+            --bg-gradient-start: #6366f1;
+            --bg-gradient-end: #8b5cf6;
+            --text-primary: #1f2937;
+            --text-secondary: #6b7280;
+            --text-tertiary: #9ca3af;
+            --border-primary: #e5e7eb;
+            --border-secondary: #d1d5db;
+            --shadow-color: rgba(0, 0, 0, 0.1);
+            --card-bg: #ffffff;
+            --header-bg: linear-gradient(to right, #4f46e5, #7c3aed);
+            --scrollbar-track: #f1f5f9;
+            --scrollbar-thumb: #cbd5e1;
+            --scrollbar-thumb-hover: #94a3b8;
+        }
+        
+        [data-theme="dark"] {
+            /* Dark theme variables */
+            --bg-primary: #111827;
+            --bg-secondary: #1f2937;
+            --bg-tertiary: #374151;
+            --bg-gradient-start: #1e1b4b;
+            --bg-gradient-end: #581c87;
+            --text-primary: #f9fafb;
+            --text-secondary: #d1d5db;
+            --text-tertiary: #9ca3af;
+            --border-primary: #374151;
+            --border-secondary: #4b5563;
+            --shadow-color: rgba(0, 0, 0, 0.3);
+            --card-bg: #1f2937;
+            --header-bg: linear-gradient(to right, #312e81, #581c87);
+            --scrollbar-track: #374151;
+            --scrollbar-thumb: #6b7280;
+            --scrollbar-thumb-hover: #9ca3af;
         }
         
         .queue-card-hover:hover {
@@ -733,17 +1058,17 @@ function getAdminHTML(routePrefix: string): string {
         }
         
         ::-webkit-scrollbar-track {
-            background: #f1f5f9;
+            background: var(--scrollbar-track);
             border-radius: 4px;
         }
         
         ::-webkit-scrollbar-thumb {
-            background: #cbd5e1;
+            background: var(--scrollbar-thumb);
             border-radius: 4px;
         }
         
         ::-webkit-scrollbar-thumb:hover {
-            background: #94a3b8;
+            background: var(--scrollbar-thumb-hover);
         }
         
         /* Smooth transitions for all interactive elements */
@@ -754,11 +1079,34 @@ function getAdminHTML(routePrefix: string): string {
         }
     </style>
 </head>
-<body class="bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 min-h-screen p-4 md:p-6">
+<body class="min-h-screen p-4 md:p-6" style="background: linear-gradient(to bottom right, var(--bg-gradient-start), var(--bg-gradient-end));">
     <div class="max-w-7xl mx-auto">
         <!-- Header -->
-        <div class="bg-white rounded-t-2xl shadow-2xl">
-            <div class="bg-gradient-to-r from-indigo-600 to-purple-600 text-white p-8 rounded-t-2xl">
+        <div class="rounded-t-2xl shadow-2xl" style="background: var(--card-bg);">
+            <div class="text-white p-8 rounded-t-2xl" style="background: var(--header-bg);">
+                <div class="flex items-center justify-between mb-4">
+                    <div class="flex items-center gap-2">
+                        <span class="w-3 h-3 bg-green-400 rounded-full"></span>
+                        <span class="text-sm text-indigo-100">Authenticated</span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <button 
+                            id="themeToggle" 
+                            class="px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg font-medium transition-colors duration-200 flex items-center gap-2"
+                            title="Toggle dark mode"
+                        >
+                            <span id="themeIcon" class="text-sm">🌙</span>
+                            <span id="themeText" class="hidden sm:inline">Dark</span>
+                        </button>
+                        <button 
+                            id="logoutBtn" 
+                            class="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg font-medium transition-colors duration-200 flex items-center gap-2"
+                        >
+                            <span class="text-sm">🚪</span>
+                            Logout
+                        </button>
+                    </div>
+                </div>
                 <div class="text-center">
                     <h1 class="text-4xl md:text-5xl font-bold mb-3 flex items-center justify-center gap-3">
                         <span class="text-5xl">🚀</span>
@@ -770,11 +1118,11 @@ function getAdminHTML(routePrefix: string): string {
         </div>
         
         <!-- Main Content -->
-        <div class="bg-white rounded-b-2xl shadow-2xl">
+        <div class="rounded-b-2xl shadow-2xl" style="background: var(--card-bg);">
             <!-- Loading State -->
             <div id="loading" class="text-center py-16 px-8">
-                <div class="inline-block w-12 h-12 border-4 border-gray-200 border-t-indigo-600 rounded-full spinner mb-6"></div>
-                <p class="text-gray-600 text-lg font-medium">Loading queue data...</p>
+                <div class="inline-block w-12 h-12 border-4 rounded-full spinner mb-6" style="border-color: var(--border-primary); border-top-color: #4f46e5;"></div>
+                <p class="text-lg font-medium" style="color: var(--text-secondary);">Loading queue data...</p>
             </div>
             
             <!-- Content -->
@@ -784,9 +1132,9 @@ function getAdminHTML(routePrefix: string): string {
                 
                 <!-- Cleanup Status Section -->
                 <div id="cleanupSection" class="mb-8">
-                    <div class="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-xl border border-purple-200 p-6">
+                    <div class="rounded-xl p-6" style="background: var(--bg-secondary); border: 1px solid var(--border-primary);">
                         <div class="flex items-center justify-between mb-6">
-                            <h2 class="text-2xl font-bold text-gray-900 flex items-center gap-3">
+                            <h2 class="text-2xl font-bold flex items-center gap-3" style="color: var(--text-primary);">
                                 <span class="text-2xl">🧹</span>
                                 Auto Cleanup Status
                             </h2>
@@ -800,8 +1148,8 @@ function getAdminHTML(routePrefix: string): string {
                         
                         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                             <!-- Service Status -->
-                            <div class="bg-white rounded-lg border border-gray-200 p-4">
-                                <div class="text-sm font-medium text-gray-600 mb-2">Service Status</div>
+                            <div class="rounded-lg p-4" style="background: var(--card-bg); border: 1px solid var(--border-primary);">
+                                <div class="text-sm font-medium mb-2" style="color: var(--text-secondary);">Service Status</div>
                                 <div id="cleanupServiceStatus" class="flex items-center gap-2">
                                     <span class="w-3 h-3 bg-gray-400 rounded-full"></span>
                                     <span class="text-sm text-gray-500">Loading...</span>
@@ -809,8 +1157,8 @@ function getAdminHTML(routePrefix: string): string {
                             </div>
                             
                             <!-- Running Status -->
-                            <div class="bg-white rounded-lg border border-gray-200 p-4">
-                                <div class="text-sm font-medium text-gray-600 mb-2">Current State</div>
+                            <div class="rounded-lg p-4" style="background: var(--card-bg); border: 1px solid var(--border-primary);">
+                                <div class="text-sm font-medium mb-2" style="color: var(--text-secondary);">Current State</div>
                                 <div id="cleanupRunningStatus" class="flex items-center gap-2">
                                     <span class="w-3 h-3 bg-gray-400 rounded-full"></span>
                                     <span class="text-sm text-gray-500">Loading...</span>
@@ -818,23 +1166,23 @@ function getAdminHTML(routePrefix: string): string {
                             </div>
                             
                             <!-- Next Scheduled -->
-                            <div class="bg-white rounded-lg border border-gray-200 p-4">
-                                <div class="text-sm font-medium text-gray-600 mb-2">Next Cleanup</div>
-                                <div id="nextCleanupTime" class="text-sm text-gray-900 font-medium">Loading...</div>
+                            <div class="rounded-lg p-4" style="background: var(--card-bg); border: 1px solid var(--border-primary);">
+                                <div class="text-sm font-medium mb-2" style="color: var(--text-secondary);">Next Cleanup</div>
+                                <div id="nextCleanupTime" class="text-sm font-medium" style="color: var(--text-primary);">Loading...</div>
                             </div>
                             
                             <!-- Last Run Stats -->
-                            <div class="bg-white rounded-lg border border-gray-200 p-4">
-                                <div class="text-sm font-medium text-gray-600 mb-2">Last Run</div>
-                                <div id="lastCleanupStats" class="text-sm text-gray-900">
+                            <div class="rounded-lg p-4" style="background: var(--card-bg); border: 1px solid var(--border-primary);">
+                                <div class="text-sm font-medium mb-2" style="color: var(--text-secondary);">Last Run</div>
+                                <div id="lastCleanupStats" class="text-sm" style="color: var(--text-primary);">
                                     <div class="text-gray-500">No data available</div>
                                 </div>
                             </div>
                         </div>
                         
                         <!-- Detailed Last Cleanup Stats -->
-                        <div id="detailedCleanupStats" class="mt-6 bg-white rounded-lg border border-gray-200 p-4 hidden">
-                            <div class="text-sm font-medium text-gray-600 mb-3">Last Cleanup Details</div>
+                        <div id="detailedCleanupStats" class="mt-6 rounded-lg p-4 hidden" style="background: var(--card-bg); border: 1px solid var(--border-primary);">
+                            <div class="text-sm font-medium mb-3" style="color: var(--text-secondary);">Last Cleanup Details</div>
                             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
                                 <div>
                                     <span class="text-gray-600">Total Jobs Cleaned:</span>
@@ -864,8 +1212,8 @@ function getAdminHTML(routePrefix: string): string {
                 <!-- Jobs Section -->
                 <div id="jobsSection" class="hidden">
                     <!-- Jobs Header -->
-                    <div class="flex flex-col md:flex-row md:items-center md:justify-between mb-6 p-6 bg-gray-50 rounded-xl border border-gray-200">
-                        <h2 id="jobsTitle" class="text-2xl font-bold text-gray-900 mb-4 md:mb-0">Jobs</h2>
+                    <div class="flex flex-col md:flex-row md:items-center md:justify-between mb-6 p-6 rounded-xl" style="background: var(--bg-secondary); border: 1px solid var(--border-primary);">
+                        <h2 id="jobsTitle" class="text-2xl font-bold mb-4 md:mb-0" style="color: var(--text-primary);">Jobs</h2>
                         <div class="flex flex-wrap gap-2">
                             <button class="filter-btn px-4 py-2 rounded-lg font-medium transition-all duration-200 bg-indigo-600 text-white shadow-md" data-status="all">All</button>
                             <button class="filter-btn px-4 py-2 rounded-lg font-medium transition-all duration-200 bg-white text-gray-700 border border-gray-300 hover:bg-gray-50" data-status="waiting">Waiting</button>
@@ -876,20 +1224,20 @@ function getAdminHTML(routePrefix: string): string {
                     </div>
                     
                     <!-- Jobs Table -->
-                    <div class="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-lg">
+                    <div class="rounded-xl overflow-hidden shadow-lg" style="background: var(--card-bg); border: 1px solid var(--border-primary);">
                         <div class="overflow-x-auto">
                             <table class="w-full">
-                                <thead class="bg-gray-50 border-b border-gray-200">
+                                <thead style="background: var(--bg-secondary); border-bottom: 1px solid var(--border-primary);">
                                     <tr>
-                                        <th class="px-3 md:px-6 py-4 text-left text-sm font-semibold text-gray-900">ID</th>
-                                        <th class="px-3 md:px-6 py-4 text-left text-sm font-semibold text-gray-900">Status</th>
-                                        <th class="px-3 md:px-6 py-4 text-left text-sm font-semibold text-gray-900 hidden sm:table-cell">Data</th>
-                                        <th class="px-3 md:px-6 py-4 text-left text-sm font-semibold text-gray-900 hidden md:table-cell">Created</th>
-                                        <th class="px-3 md:px-6 py-4 text-left text-sm font-semibold text-gray-900 hidden lg:table-cell">Attempts</th>
-                                        <th class="px-3 md:px-6 py-4 text-left text-sm font-semibold text-gray-900">Actions</th>
+                                        <th class="px-3 md:px-6 py-4 text-left text-sm font-semibold" style="color: var(--text-primary);">ID</th>
+                                        <th class="px-3 md:px-6 py-4 text-left text-sm font-semibold" style="color: var(--text-primary);">Status</th>
+                                        <th class="px-3 md:px-6 py-4 text-left text-sm font-semibold hidden sm:table-cell" style="color: var(--text-primary);">Data</th>
+                                        <th class="px-3 md:px-6 py-4 text-left text-sm font-semibold hidden md:table-cell" style="color: var(--text-primary);">Created</th>
+                                        <th class="px-3 md:px-6 py-4 text-left text-sm font-semibold hidden lg:table-cell" style="color: var(--text-primary);">Attempts</th>
+                                        <th class="px-3 md:px-6 py-4 text-left text-sm font-semibold" style="color: var(--text-primary);">Actions</th>
                                     </tr>
                                 </thead>
-                                <tbody id="jobsTableBody" class="divide-y divide-gray-200"></tbody>
+                                <tbody id="jobsTableBody" style="border-top: 1px solid var(--border-primary);"></tbody>
                             </table>
                         </div>
                     </div>
@@ -935,29 +1283,30 @@ function getAdminHTML(routePrefix: string): string {
             
             queues.forEach(queue => {
                 const card = document.createElement('div');
-                card.className = 'bg-white rounded-xl border border-gray-200 p-6 cursor-pointer transition-all duration-300 queue-card-hover hover:border-indigo-300 hover:shadow-lg';
+                card.className = 'rounded-xl border p-6 cursor-pointer transition-all duration-300 queue-card-hover hover:shadow-lg';
+                card.style.cssText = 'background-color: var(--bg-primary); border-color: var(--border-primary); color: var(--text-primary);';
                 card.setAttribute('data-queue-card', queue.name);
                 card.onclick = () => selectQueue(queue.name);
                 
                 card.innerHTML = \`
-                    <div class="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+                    <div class="text-xl font-bold mb-4 flex items-center gap-2" style="color: var(--text-primary);">
                         <span class="w-3 h-3 bg-indigo-500 rounded-full"></span>
                         \${queue.name}
                     </div>
                     <div class="grid grid-cols-2 gap-3">
-                        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-center">
+                        <div class="border rounded-lg p-3 text-center" style="background-color: var(--bg-secondary); border-color: var(--border-primary);">
                             <div class="text-2xl font-bold text-yellow-700">\${queue.waiting}</div>
                             <div class="text-sm text-yellow-600 font-medium">Waiting</div>
                         </div>
-                        <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 text-center">
+                        <div class="border rounded-lg p-3 text-center" style="background-color: var(--bg-secondary); border-color: var(--border-primary);">
                             <div class="text-2xl font-bold text-blue-700">\${queue.processing}</div>
                             <div class="text-sm text-blue-600 font-medium">Processing</div>
                         </div>
-                        <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-center">
+                        <div class="border rounded-lg p-3 text-center" style="background-color: var(--bg-secondary); border-color: var(--border-primary);">
                             <div class="text-2xl font-bold text-green-700">\${queue.completed}</div>
                             <div class="text-sm text-green-600 font-medium">Completed</div>
                         </div>
-                        <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-center">
+                        <div class="border rounded-lg p-3 text-center" style="background-color: var(--bg-secondary); border-color: var(--border-primary);">
                             <div class="text-2xl font-bold text-red-700">\${queue.failed}</div>
                             <div class="text-sm text-red-600 font-medium">Failed</div>
                         </div>
@@ -974,16 +1323,16 @@ function getAdminHTML(routePrefix: string): string {
             
             // Update active queue card
             document.querySelectorAll('[data-queue-card]').forEach(card => {
-                card.classList.remove('ring-2', 'ring-indigo-500', 'border-indigo-500', 'bg-indigo-50');
-                card.classList.add('border-gray-200');
+                card.classList.remove('ring-2', 'ring-indigo-500');
+                card.style.cssText = 'background-color: var(--bg-primary); border-color: var(--border-primary); color: var(--text-primary);';
             });
             
             // Find and highlight the selected card
             const cards = document.querySelectorAll('[data-queue-card]');
             cards.forEach(card => {
                 if (card.textContent.includes(queueName)) {
-                    card.classList.remove('border-gray-200');
-                    card.classList.add('ring-2', 'ring-indigo-500', 'border-indigo-500', 'bg-indigo-50');
+                    card.classList.add('ring-2', 'ring-indigo-500');
+                    card.style.cssText = 'background-color: var(--bg-accent); border-color: var(--border-accent); color: var(--text-primary);';
                 }
             });
             
@@ -1020,30 +1369,33 @@ function getAdminHTML(routePrefix: string): string {
             
             jobs.forEach(job => {
                 const row = document.createElement('tr');
-                row.className = 'hover:bg-gray-50 transition-colors duration-200';
+                row.className = 'transition-colors duration-200';
+                row.style.cssText = 'color: var(--text-primary);';
+                row.onmouseenter = () => row.style.backgroundColor = 'var(--bg-hover)';
+                row.onmouseleave = () => row.style.backgroundColor = 'transparent';
                 
                 const statusColors = {
-                    'waiting': 'bg-yellow-100 text-yellow-800 border-yellow-200',
-                    'processing': 'bg-blue-100 text-blue-800 border-blue-200',
-                    'completed': 'bg-green-100 text-green-800 border-green-200',
-                    'failed': 'bg-red-100 text-red-800 border-red-200'
+                    'waiting': 'text-yellow-800',
+                    'processing': 'text-blue-800',
+                    'completed': 'text-green-800',
+                    'failed': 'text-red-800'
                 };
                 
-                const statusClass = statusColors[job.status] || 'bg-gray-100 text-gray-800 border-gray-200';
+                const statusClass = statusColors[job.status] || 'text-gray-800';
                 
                 const canRetry = job.status === 'failed';
                 const canDelete = ['completed', 'failed'].includes(job.status);
                 
                 row.innerHTML = \`
-                    <td class="px-3 md:px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">\${job.id}</td>
+                    <td class="px-3 md:px-6 py-4 whitespace-nowrap text-sm font-medium" style="color: var(--text-primary);">\${job.id}</td>
                     <td class="px-3 md:px-6 py-4 whitespace-nowrap">
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border \${statusClass}">
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border \${statusClass}" style="background-color: var(--bg-secondary); border-color: var(--border-primary);">
                             \${job.status}
                         </span>
                     </td>
-                    <td class="px-3 md:px-6 py-4 max-w-xs truncate text-sm text-gray-900 hidden sm:table-cell" title="\${JSON.stringify(job.data)}">\${JSON.stringify(job.data)}</td>
-                    <td class="px-3 md:px-6 py-4 whitespace-nowrap text-sm text-gray-500 hidden md:table-cell">\${new Date(job.created_at).toLocaleString()}</td>
-                    <td class="px-3 md:px-6 py-4 whitespace-nowrap text-sm text-gray-500 hidden lg:table-cell">\${job.attempts}</td>
+                    <td class="px-3 md:px-6 py-4 max-w-xs truncate text-sm hidden sm:table-cell" style="color: var(--text-primary);" title="\${JSON.stringify(job.data)}">\${JSON.stringify(job.data)}</td>
+                    <td class="px-3 md:px-6 py-4 whitespace-nowrap text-sm hidden md:table-cell" style="color: var(--text-secondary);">\${new Date(job.created_at).toLocaleString()}</td>
+                    <td class="px-3 md:px-6 py-4 whitespace-nowrap text-sm hidden lg:table-cell" style="color: var(--text-secondary);">\${job.attempts}</td>
                     <td class="px-3 md:px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <div class="flex flex-col sm:flex-row gap-1 sm:gap-2">
                             <button class="inline-flex items-center justify-center px-2 md:px-3 py-1.5 border border-transparent text-xs font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed" \${!canRetry ? 'disabled' : ''} onclick="retryJob('\${job.id}')">Retry</button>
@@ -1108,8 +1460,8 @@ function getAdminHTML(routePrefix: string): string {
         document.addEventListener('click', (e) => {
             if (e.target.classList.contains('filter-btn')) {
                 document.querySelectorAll('.filter-btn').forEach(btn => {
-                    btn.classList.remove('bg-indigo-600', 'text-white', 'shadow-md');
-                    btn.classList.add('bg-white', 'text-gray-700', 'border', 'border-gray-300', 'hover:bg-gray-50');
+                    btn.classList.remove('bg-indigo-600', 'text-white', 'shadow-md', 'bg-white', 'text-gray-700', 'border', 'border-gray-300', 'hover:bg-gray-50');
+                    btn.style.cssText = 'background-color: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-primary);';
                 });
                 
                 e.target.classList.remove('bg-white', 'text-gray-700', 'border', 'border-gray-300', 'hover:bg-gray-50');
@@ -1126,101 +1478,190 @@ function getAdminHTML(routePrefix: string): string {
                 const response = await fetch(\`\${API_BASE}/cleanup/status\`);
                 const data = await response.json();
                 
+                // Debug logging
+                console.log('Cleanup status response:', data);
+                
                 if (data.success) {
-                    updateCleanupStatusUI(data.data);
+                    if (data.status) {
+                        console.log('Status object:', data.status);
+                        updateCleanupStatusUI(data.status);
+                    } else {
+                        console.warn('Status object is missing from response');
+                        showCleanupStatusError('Cleanup status data is missing');
+                    }
                 } else {
                     console.error('Failed to load cleanup status:', data.error);
+                    showCleanupStatusError(data.error || 'Failed to load cleanup status');
                 }
             } catch (error) {
                 console.error('Error loading cleanup status:', error);
+                showCleanupStatusError('Unable to connect to cleanup service');
+            }
+        }
+        
+        // Show cleanup status error in UI
+        function showCleanupStatusError(message) {
+            const serviceStatusEl = document.getElementById('cleanupServiceStatus');
+            const runningStatusEl = document.getElementById('cleanupRunningStatus');
+            const nextCleanupEl = document.getElementById('nextCleanupTime');
+            const lastStatsEl = document.getElementById('lastCleanupStats');
+            const manualBtn = document.getElementById('manualCleanupBtn');
+            
+            if (serviceStatusEl) {
+                serviceStatusEl.innerHTML = \`
+                    <span class="w-3 h-3 bg-red-500 rounded-full"></span>
+                    <span class="text-sm text-red-700">Error</span>
+                \`;
+            }
+            
+            if (runningStatusEl) {
+                runningStatusEl.innerHTML = \`
+                    <span class="w-3 h-3 bg-gray-400 rounded-full"></span>
+                    <span class="text-sm text-gray-500">Unknown</span>
+                \`;
+            }
+            
+            if (nextCleanupEl) {
+                nextCleanupEl.innerHTML = \`<div class="text-red-600">\${message}</div>\`;
+            }
+            
+            if (lastStatsEl) {
+                lastStatsEl.innerHTML = \`<div class="text-red-600">\${message}</div>\`;
+            }
+            
+            if (manualBtn) {
+                manualBtn.disabled = true;
+                manualBtn.innerHTML = \`
+                    <span class="flex items-center gap-2">
+                        <span class="text-sm">⚠️</span>
+                        Service Error
+                    </span>
+                \`;
             }
         }
 
         // Update cleanup status UI
         function updateCleanupStatusUI(status) {
+            // Validate status object
+            if (!status || typeof status !== 'object') {
+                console.error('Invalid status object:', status);
+                showCleanupStatusError('Invalid cleanup status data');
+                return;
+            }
+            
             // Update service status
             const serviceStatusEl = document.getElementById('cleanupServiceStatus');
-            const isEnabled = status.nextScheduledCleanup !== null;
-            serviceStatusEl.innerHTML = \`
-                <span class="w-3 h-3 \${isEnabled ? 'bg-green-500' : 'bg-gray-400'} rounded-full"></span>
-                <span class="text-sm \${isEnabled ? 'text-green-700' : 'text-gray-500'}">\${isEnabled ? 'Enabled' : 'Disabled'}</span>
-            \`;
+            const isEnabled = status.nextScheduledCleanup !== null && status.nextScheduledCleanup !== undefined;
+            if (serviceStatusEl) {
+                serviceStatusEl.innerHTML = \`
+                    <span class="w-3 h-3 \${isEnabled ? 'bg-green-500' : 'bg-gray-400'} rounded-full"></span>
+                    <span class="text-sm \${isEnabled ? 'text-green-700' : 'text-gray-500'}">\${isEnabled ? 'Enabled' : 'Disabled'}</span>
+                \`;
+            }
             
             // Update running status
             const runningStatusEl = document.getElementById('cleanupRunningStatus');
-            runningStatusEl.innerHTML = \`
-                <span class="w-3 h-3 \${status.isRunning ? 'bg-blue-500 animate-pulse' : 'bg-gray-400'} rounded-full"></span>
-                <span class="text-sm \${status.isRunning ? 'text-blue-700' : 'text-gray-500'}">\${status.isRunning ? 'Running' : 'Idle'}</span>
-            \`;
+            const isRunning = Boolean(status.isRunning);
+            if (runningStatusEl) {
+                runningStatusEl.innerHTML = \`
+                    <span class="w-3 h-3 \${isRunning ? 'bg-blue-500 animate-pulse' : 'bg-gray-400'} rounded-full"></span>
+                    <span class="text-sm \${isRunning ? 'text-blue-700' : 'text-gray-500'}">\${isRunning ? 'Running' : 'Idle'}</span>
+                \`;
+            }
             
             // Update next cleanup time
             const nextCleanupEl = document.getElementById('nextCleanupTime');
-            if (status.nextScheduledCleanup) {
-                const nextTime = new Date(status.nextScheduledCleanup);
-                const now = new Date();
-                const diffMs = nextTime - now;
-                
-                if (diffMs > 0) {
-                    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-                    const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-                    nextCleanupEl.innerHTML = \`
-                        <div class="font-medium">\${nextTime.toLocaleString()}</div>
-                        <div class="text-xs text-gray-500 mt-1">in \${diffHours}h \${diffMinutes}m</div>
-                    \`;
+            if (nextCleanupEl) {
+                if (status.nextScheduledCleanup && status.nextScheduledCleanup !== null) {
+                    try {
+                        const nextTime = new Date(status.nextScheduledCleanup);
+                        const now = new Date();
+                        const diffMs = nextTime - now;
+                        
+                        if (diffMs > 0) {
+                            const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+                            const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                            nextCleanupEl.innerHTML = \`
+                                <div class="font-medium">\${nextTime.toLocaleString()}</div>
+                                <div class="text-xs text-gray-500 mt-1">in \${diffHours}h \${diffMinutes}m</div>
+                            \`;
+                        } else {
+                            nextCleanupEl.innerHTML = '<div class="text-orange-600 font-medium">Overdue</div>';
+                        }
+                    } catch (error) {
+                        console.error('Error parsing nextScheduledCleanup date:', error);
+                        nextCleanupEl.innerHTML = '<div class="text-red-600">Invalid date</div>';
+                    }
                 } else {
-                    nextCleanupEl.innerHTML = '<div class="text-orange-600 font-medium">Overdue</div>';
+                    nextCleanupEl.innerHTML = '<div class="text-gray-500">Not scheduled</div>';
                 }
-            } else {
-                nextCleanupEl.innerHTML = '<div class="text-gray-500">Not scheduled</div>';
             }
             
             // Update last cleanup stats
             const lastStatsEl = document.getElementById('lastCleanupStats');
             const detailedStatsEl = document.getElementById('detailedCleanupStats');
             
-            if (status.lastCleanupStats) {
-                const stats = status.lastCleanupStats;
-                const timestamp = new Date(stats.timestamp);
-                
-                lastStatsEl.innerHTML = \`
-                    <div class="font-medium text-gray-900">\${stats.totalJobsCleaned} jobs cleaned</div>
-                    <div class="text-xs text-gray-500 mt-1">\${timestamp.toLocaleString()}</div>
-                    <button onclick="toggleDetailedStats()" class="text-xs text-indigo-600 hover:text-indigo-800 mt-1 underline">View details</button>
-                \`;
-                
-                // Update detailed stats
-                document.getElementById('totalJobsCleaned').textContent = stats.totalJobsCleaned;
-                document.getElementById('completedJobsCleaned').textContent = stats.completedJobsCleaned;
-                document.getElementById('failedJobsCleaned').textContent = stats.failedJobsCleaned;
-                document.getElementById('cleanupDuration').textContent = \`\${Math.round(stats.duration)}ms\`;
-                
-                // Update queues cleaned
-                const queuesBadges = stats.queuesCleaned.map(queue => 
-                    \`<span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">\${queue}</span>\`
-                ).join('');
-                document.getElementById('queuesCleaned').innerHTML = queuesBadges || '<span class="text-gray-500 text-xs">No queues affected</span>';
-            } else {
-                lastStatsEl.innerHTML = '<div class="text-gray-500">No cleanup performed yet</div>';
-                detailedStatsEl.classList.add('hidden');
+            if (lastStatsEl) {
+                if (status.lastCleanupStats && typeof status.lastCleanupStats === 'object') {
+                    const stats = status.lastCleanupStats;
+                    try {
+                        const timestamp = new Date(stats.timestamp);
+                        
+                        lastStatsEl.innerHTML = \`
+                            <div class="font-medium text-gray-900">\${stats.totalJobsCleaned || 0} jobs cleaned</div>
+                            <div class="text-xs text-gray-500 mt-1">\${timestamp.toLocaleString()}</div>
+                            <button onclick="toggleDetailedStats()" class="text-xs text-indigo-600 hover:text-indigo-800 mt-1 underline">View details</button>
+                        \`;
+                        
+                        // Update detailed stats with null checks
+                        const totalEl = document.getElementById('totalJobsCleaned');
+                        const completedEl = document.getElementById('completedJobsCleaned');
+                        const failedEl = document.getElementById('failedJobsCleaned');
+                        const durationEl = document.getElementById('cleanupDuration');
+                        const queuesEl = document.getElementById('queuesCleaned');
+                        
+                        if (totalEl) totalEl.textContent = stats.totalJobsCleaned || 0;
+                        if (completedEl) completedEl.textContent = stats.completedJobsCleaned || 0;
+                        if (failedEl) failedEl.textContent = stats.failedJobsCleaned || 0;
+                        if (durationEl) durationEl.textContent = \`\${Math.round(stats.duration || 0)}ms\`;
+                        
+                        // Update queues cleaned
+                        if (queuesEl) {
+                            const queuesBadges = (stats.queuesCleaned || []).map(queue => 
+                                \`<span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">\${queue}</span>\`
+                            ).join('');
+                            queuesEl.innerHTML = queuesBadges || '<span class="text-gray-500 text-xs">No queues affected</span>';
+                        }
+                    } catch (error) {
+                        console.error('Error processing lastCleanupStats:', error);
+                        lastStatsEl.innerHTML = '<div class="text-red-600">Error loading stats</div>';
+                    }
+                } else {
+                    lastStatsEl.innerHTML = '<div class="text-gray-500">No cleanup performed yet</div>';
+                    if (detailedStatsEl) detailedStatsEl.classList.add('hidden');
+                }
             }
             
             // Update manual cleanup button state
             const manualBtn = document.getElementById('manualCleanupBtn');
-            manualBtn.disabled = status.isRunning;
-            if (status.isRunning) {
-                manualBtn.innerHTML = \`
-                    <span class="flex items-center gap-2">
-                        <span class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                        Running...
-                    </span>
-                \`;
-            } else {
-                manualBtn.innerHTML = \`
-                    <span class="flex items-center gap-2">
-                        <span class="text-sm">🚀</span>
-                        Trigger Cleanup
-                    </span>
-                \`;
+            if (manualBtn) {
+                const isRunning = Boolean(status.isRunning);
+                manualBtn.disabled = isRunning;
+                if (isRunning) {
+                    manualBtn.innerHTML = \`
+                        <span class="flex items-center gap-2">
+                            <span class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                            Running...
+                        </span>
+                    \`;
+                } else {
+                    manualBtn.innerHTML = \`
+                        <span class="flex items-center gap-2">
+                            <span class="text-sm">🚀</span>
+                            Trigger Cleanup
+                        </span>
+                    \`;
+                }
             }
         }
 
@@ -1263,11 +1704,57 @@ function getAdminHTML(routePrefix: string): string {
             }, 5000); // Refresh every 5 seconds
         }
 
-        // Add event listener for manual cleanup button
+        // Logout functionality
+        async function logout() {
+            try {
+                const response = await fetch(\`\${API_BASE.replace('/api', '')}/auth/logout\`, {
+                    method: 'POST'
+                });
+                
+                // Redirect to login page regardless of response
+                window.location.href = \`\${API_BASE.replace('/api', '')}/admin\`;
+            } catch (error) {
+                console.error('Logout error:', error);
+                // Still redirect on error
+                window.location.href = \`\${API_BASE.replace('/api', '')}/admin\`;
+            }
+        }
+
+        // Theme management
+        function initTheme() {
+            const savedTheme = localStorage.getItem('admin-theme') || 'light';
+            applyTheme(savedTheme);
+            updateThemeToggleButton(savedTheme);
+        }
+
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+            applyTheme(newTheme);
+            localStorage.setItem('admin-theme', newTheme);
+            updateThemeToggleButton(newTheme);
+        }
+
+        function applyTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+        }
+
+        function updateThemeToggleButton(theme) {
+            const toggleBtn = document.getElementById('themeToggle');
+            if (toggleBtn) {
+                toggleBtn.innerHTML = theme === 'light' ? '🌙' : '☀️';
+                toggleBtn.title = theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode';
+            }
+        }
+
+        // Add event listeners
         document.getElementById('manualCleanupBtn').addEventListener('click', triggerManualCleanup);
+        document.getElementById('logoutBtn').addEventListener('click', logout);
+        document.getElementById('themeToggle').addEventListener('click', toggleTheme);
         
         // Initialize when page loads
         async function init() {
+            initTheme();
             await loadQueues();
             await loadCleanupStatus();
             startAutoRefresh();

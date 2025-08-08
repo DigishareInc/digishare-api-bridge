@@ -23,6 +23,11 @@ export const defaultOptions: Required<HybridQueuePluginOptions> = {
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     headers: ['Content-Type', 'Authorization'],
   },
+  auth: {
+    enabled: true, // Authentication is enabled by default for security
+    adminKey: 'admin-queue-2024-secure-key', // Default admin key - CHANGE THIS IN PRODUCTION
+    sessionTimeout: 3600000, // 1 hour
+  },
 };
 
 /**
@@ -43,6 +48,10 @@ export function mergeOptions(userOptions: HybridQueuePluginOptions = {}): Requir
     cors: {
       ...defaultOptions.cors,
       ...userOptions.cors,
+    },
+    auth: {
+      ...defaultOptions.auth,
+      ...userOptions.auth,
     },
   };
 }
@@ -89,5 +98,18 @@ export function validateOptions(options: Required<HybridQueuePluginOptions>): vo
 
   if (options.queue.retryDelay !== undefined && options.queue.retryDelay < 0) {
     throw new Error('queue.retryDelay must be non-negative');
+  }
+
+  if (options.auth.enabled) {
+    if (!options.auth.adminKey || typeof options.auth.adminKey !== 'string') {
+      throw new Error('auth.adminKey is required when authentication is enabled');
+    }
+    if (options.auth.adminKey.length < 8) {
+      throw new Error('auth.adminKey must be at least 8 characters long');
+    }
+  }
+
+  if (options.auth.sessionTimeout !== undefined && options.auth.sessionTimeout < 60000) {
+    throw new Error('auth.sessionTimeout must be at least 60000ms (1 minute)');
   }
 }

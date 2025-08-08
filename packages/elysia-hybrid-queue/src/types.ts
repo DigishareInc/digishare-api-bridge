@@ -109,6 +109,28 @@ export interface HybridQueuePluginOptions {
      */
     headers?: string[];
   };
+
+  /**
+   * Authentication configuration for admin interface
+   */
+  auth?: {
+    /**
+     * Enable authentication for admin interface
+     * @default false
+     */
+    enabled?: boolean;
+
+    /**
+     * Admin key required for login (required when auth is enabled)
+     */
+    adminKey?: string;
+
+    /**
+     * Session timeout in milliseconds
+     * @default 3600000 (1 hour)
+     */
+    sessionTimeout?: number;
+  };
 }
 
 export interface QueueStats {

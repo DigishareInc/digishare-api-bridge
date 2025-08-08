@@ -81,6 +81,11 @@ const app = new Elysia()
       origin: ['http://localhost:3000'],
       methods: ['GET', 'POST', 'DELETE'],
       allowedHeaders: ['Content-Type']
+    },
+    auth: {
+      enabled: true,
+      adminKey: 'your-secure-admin-key-here',
+      sessionTimeout: 7200000 // 2 hours
     }
   }))
   .listen(3000);
@@ -99,6 +104,7 @@ const app = new Elysia()
 | `cleanup` | `CleanupOptions` | See below | Cleanup service configuration |
 | `queue` | `QueueOptions` | See below | Queue behavior configuration |
 | `cors` | `CorsOptions` | `undefined` | CORS configuration |
+| `auth` | `AuthOptions` | See below | Authentication configuration |
 
 ### `CleanupOptions`
 
@@ -117,6 +123,16 @@ const app = new Elysia()
 | `pollingIntervalMs` | `number` | `1000` | Job polling interval in milliseconds |
 | `maxRetries` | `number` | `3` | Maximum retry attempts for failed jobs |
 | `retryDelayMs` | `number` | `5000` | Delay between retries in milliseconds |
+
+### `AuthOptions`
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enabled` | `boolean` | `true` | Enable authentication for admin UI |
+| `adminKey` | `string` | `'admin-queue-2024-secure-key'` | Admin key for authentication (CHANGE IN PRODUCTION) |
+| `sessionTimeout` | `number` | `3600000` | Session timeout in milliseconds (1 hour) |
+
+> **Security Note**: Authentication is enabled by default for security. Always change the default `adminKey` in production environments to a secure, unique value.
 
 ## API Endpoints
 
@@ -139,9 +155,16 @@ When `enableAPI` is true, the following endpoints are available:
 - `GET {routePrefix}/api/cleanup/queues/:name/old-jobs` - Get old jobs for cleanup
   - Query params: `status`, `hours`, `limit`
 
+### Authentication
+
+- `POST {routePrefix}/api/auth/login` - Login with admin key
+  - Body: `{ "adminKey": string }`
+- `POST {routePrefix}/api/auth/logout` - Logout and clear session
+- `GET {routePrefix}/api/auth/status` - Check authentication status
+
 ### Admin UI
 
-- `GET {routePrefix}/admin` - Queue management web interface
+- `GET {routePrefix}/admin` - Queue management web interface (requires authentication)
 
 ## Usage Examples
 

@@ -6,6 +6,8 @@ export function loadEnvironmentConfig(): EnvConfig {
     API_KEY: process.env.API_KEY || "",
     TARGET_BASE_URL: process.env.TARGET_BASE_URL || "",
     TARGET_API_KEY: process.env.TARGET_API_KEY || "",
+    ADMIN_KEY: process.env.ADMIN_KEY || "",
+
     PORT: process.env.PORT || "3000",
   };
 

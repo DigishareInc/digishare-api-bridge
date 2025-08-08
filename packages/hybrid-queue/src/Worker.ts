@@ -12,6 +12,10 @@ export class Worker {
   constructor(queueName: string, handler: JobHandler) {
     this.queue = new Queue(queueName);
     this.handler = handler;
+    
+    // Recover any orphaned processing jobs on startup
+    this.queue.recoverOrphanedJobs();
+    
     this.start();
   }
 

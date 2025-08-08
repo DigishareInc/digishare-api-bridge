@@ -75,4 +75,52 @@ export interface EnvConfig {
   TARGET_BASE_URL: string;
   TARGET_API_KEY: string;
   PORT: string;
+  ADMIN_KEY: string;
+
 }
+
+
+ 
+ 
+// Standard API Response Types
+export interface ApiResponse<T = any> {
+  success: boolean;
+  data?: T;
+  message?: string;
+  error?: string;
+}
+
+export interface WebhookResponse {
+  success: boolean;
+  message: string;
+  targetServer?: string;
+  jobId?: string|number;
+  error?: string;
+  timing?:Record<string, number>;
+  details?: Record<string, any>;
+}
+
+// Health Check Types
+export interface HealthCheckResponse {
+  service: string;
+  status: 'ok' | 'error';
+  timestamp: string;
+  uptime: number;
+  version?: string;
+}
+
+// Error Response Types
+export interface ErrorResponse {
+  success: false;
+  error: string;
+  code?: string;
+  details?: any;
+}
+
+
+ 
+
+ 
+ 
+ 
+ 

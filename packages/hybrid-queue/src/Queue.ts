@@ -347,6 +347,25 @@ export class Queue {
     }));
   }
 
+  // Recover orphaned processing jobs (reset to waiting status)
+  recoverOrphanedJobs(): number {
+    const updateQuery = `
+      UPDATE jobs 
+      SET status = 'waiting' 
+      WHERE queue_name = ? AND status = 'processing'
+    `;
+    
+    const stmt = this.db.prepare(updateQuery);
+    const result = stmt.run(this.queueName);
+    
+    const recoveredCount = result.changes;
+    if (recoveredCount > 0) {
+      console.log(`Recovered ${recoveredCount} orphaned processing jobs in queue: ${this.queueName}`);
+    }
+    
+    return recoveredCount;
+  }
+
   // Close database connection
   close(): void {
     this.db.close();

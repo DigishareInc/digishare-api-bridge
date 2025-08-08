@@ -1,47 +1,136 @@
 import { Elysia, t } from "elysia";
-import {
-  transformToCreateLead,
-  transformToUpdateLead,
-  transformToUpdateConversation,
-  buildQueryString,
-} from "./transformer";
+import { swagger } from "@elysiajs/swagger";
+import { hybridQueue } from "elysia-hybrid-queue";
 import {
   DigishareTicketCreatedEvent,
   DigishareTicketUpdatedEvent,
+  HealthCheckResponse,
+  WebhookResponse,
 } from "./core/types";
-import { requestLogger, errorHandler, apiKeyAuth, logger } from "./core/middleware";
-import { makeHttpRequest } from "./core/utils";
+import {
+  requestLogger,
+  errorHandler,
+  apiKeyAuth,
+  logger,
+} from "./core/middleware";
 import { env } from "./core/config";
+import {
+  ticketCreatedQueue,
+  ticketUpdatedQueue,
+  shutdownWebhookQueues,
+} from "./services/webhookQueue.js";
 
-const endpoints = {
-  createTicket: `${env.TARGET_BASE_URL}/Api/Leads/CreateNewLead`,
-  updateTicket: `${env.TARGET_BASE_URL}/Api/Leads/UpdateLead`,
-  updateConversation: `${env.TARGET_BASE_URL}/Api/Conversations/UpdateConversation`,
-  // createConversation: `${env.TARGET_BASE_URL}/Api/Conversations/CreateConversation`,
-};
+ 
 
-// const endpoints = {
-//     createTicket: `${env.TARGET_BASE_URL}/setdata.php`,
-//     updateTicket: `${env.TARGET_BASE_URL}/setdata.php`,
-//     updateConversation: null,
-// }
+ 
 
-const app = new Elysia()
+  new Elysia()
+  .use(
+    swagger({
+      documentation: {
+        info: {
+          title: "Digishare API Bridge",
+          version: "1.0.0",
+          description:
+            "API Bridge for processing Digishare webhook events with queue management",
+        },
+        servers: [
+          {
+            url: `http://localhost:${env.PORT}`,
+            description: "Development server",
+          },
+        ],
+        tags: [
+          {
+            name: "Health",
+            description: "Health check endpoints",
+          },
+          {
+            name: "Webhooks",
+            description: "Webhook endpoints for processing Digishare events",
+          },
+          {
+            name: "Queue Management",
+            description: "Queue management and monitoring endpoints",
+          },
+        ],
+        components: {
+          securitySchemes: {
+            "API Key": {
+              type: "apiKey",
+              in: "header",
+              name: "x-api-key",
+              description: "API key for webhook authentication",
+            },
+          },
+        },
+      },
+    })
+  )
   .use(requestLogger)
   .use(errorHandler)
-  // Health check endpoint
-  .get("/", () => {
-    const startTime = performance.now();
-    const response = {
-      service: "Digishare API Bridge",
-      status: "running",
-      timestamp: new Date().toISOString(),
-      timing: {
-        responseTime: parseFloat((performance.now() - startTime).toFixed(2)),
+  .use(
+    hybridQueue({
+      routePrefix: "/queue",
+      databasePath: "./data/queues.db",
+      auth:{
+        enabled: true,
+        adminKey: env.ADMIN_KEY,
       },
-    };
-    return response;
-  })
+      cleanup: {
+        enabled: true,
+        intervalMinutes: 60,
+        retentionCompletedHours: 168,
+        retentionFailedHours: 720,
+        batchSize: 100,
+        dryRun: false,
+      },
+    })
+  )
+  // Health check endpoint
+  .get(
+    "/",
+    (): HealthCheckResponse => {
+     return {
+        service: "Digishare API Bridge",
+        status: "ok",
+        uptime: process.uptime(),
+        version: Bun.env.version,
+        timestamp: new Date().toISOString(),
+      };
+    },
+    {
+      detail: {
+        tags: ["Health"],
+        summary: "Health Check",
+        description:
+          "Returns the current status and health of the API Bridge service",
+        responses: {
+          200: {
+            description: "Service is running",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    service: { type: "string" },
+                    status: { type: "string" },
+                    timestamp: { type: "string" },
+                    timing: {
+                      type: "object",
+                      properties: {
+                        responseTime: { type: "number" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }
+  )
   .group("/webhook", (app) =>
     app
       .use(apiKeyAuth(env.API_KEY))
@@ -49,7 +138,7 @@ const app = new Elysia()
       // Ticket created endpoint
       .post(
         "/ticket-created",
-        async ({ body }) => {
+        async ({ body }: { body: any }): Promise<WebhookResponse> => {
           const operationStartTime = performance.now();
 
           try {
@@ -65,71 +154,47 @@ const app = new Elysia()
               return {
                 success: false,
                 targetServer: env.TARGET_BASE_URL,
-                error: "Invalid event type",
+                message: "Invalid event type",
                 timing: {
                   totalExecutionTime: parseFloat(totalTime.toFixed(2)),
                 },
               };
             }
 
-            // Transform data
-            const transformStartTime = performance.now();
-            const leadParams = transformToCreateLead(event, env.TARGET_API_KEY);
-            const queryString = buildQueryString(leadParams);
-            const transformTime = performance.now() - transformStartTime;
-
-            // Forward to external API
-            const result = await makeHttpRequest(
-              `${endpoints.createTicket}?${queryString}`,
-              {
-                method: "POST",
-              }
+            // Add job to queue
+            const job = await ticketCreatedQueue.add(
+              "process-ticket-created",
+              event
             );
-
             const totalTime = performance.now() - operationStartTime;
 
-            if (result.success) {
-              logger.info("Successfully forwarded ticket.created event", {
-                timing: {
-                  transformTime: parseFloat(transformTime.toFixed(2)),
-                  httpRequestTime: result.executionTime,
-                  totalTime: parseFloat(totalTime.toFixed(2)),
-                },
-              });
-              return {
-                success: true,
-                message: "Event processed successfully",
+            logger.info("Successfully queued ticket.created event", {
+              jobId: job.id,
+              ticketId: event.data.id,
+              timing: {
+                totalTime: parseFloat(totalTime.toFixed(2)),
+              },
+            });
+
+            return {
+              success: true,
+              message: "Event queued for processing",
+              jobId: job.id,
+              targetServer: env.TARGET_BASE_URL,
+              timing: {
+                totalExecutionTime: parseFloat(totalTime.toFixed(2)),
+              },
+              details: {
                 ticketId: event.data.id,
-                targetServer: env.TARGET_BASE_URL,
-                timing: {
-                  dataTransformationTime: parseFloat(transformTime.toFixed(2)),
-                  externalApiCallTime: result.executionTime,
-                  totalExecutionTime: parseFloat(totalTime.toFixed(2)),
-                },
-              };
-            } else {
-              logger.error(
-                "Failed to forward ticket.created event",
-                result.error
-              );
-              return {
-                success: false,
-                targetServer: env.TARGET_BASE_URL,
-                error: result.error,
-                timing: {
-                  dataTransformationTime: parseFloat(transformTime.toFixed(2)),
-                  externalApiCallTime: result.executionTime,
-                  totalExecutionTime: parseFloat(totalTime.toFixed(2)),
-                },
-              };
-            }
+              },
+            };
           } catch (error) {
             const totalTime = performance.now() - operationStartTime;
-            logger.error("Error processing ticket.created event", error);
+            logger.error("Error queuing ticket.created event", error);
             return {
               success: false,
               targetServer: env.TARGET_BASE_URL,
-              error: error instanceof Error ? error.message : "Unknown error",
+              message: error instanceof Error ? error.message : "Unknown error",
               timing: {
                 totalExecutionTime: parseFloat(totalTime.toFixed(2)),
               },
@@ -145,13 +210,51 @@ const app = new Elysia()
               wasRecentlyCreated: t.Boolean(),
             }),
           }),
+          detail: {
+            tags: ["Webhooks"],
+            summary: "Process Ticket Created Event",
+            description:
+              "Receives and queues ticket.created webhook events from Digishare for asynchronous processing",
+            security: [{ "API Key": [] }],
+            responses: {
+              200: {
+                description: "Event successfully queued",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      properties: {
+                        success: { type: "boolean" },
+                        message: { type: "string" },
+                        jobId: { type: "string" },
+                        ticketId: { type: "string" },
+                        targetServer: { type: "string" },
+                        timing: {
+                          type: "object",
+                          properties: {
+                            totalExecutionTime: { type: "number" },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              400: {
+                description: "Invalid event type or request",
+              },
+              401: {
+                description: "Unauthorized - Invalid API key",
+              },
+            },
+          },
         }
       )
 
       // Ticket updated endpoint
       .post(
         "/ticket-updated",
-        async ({ body }) => {
+        async ({ body }: { body: any }): Promise<WebhookResponse> => {
           const operationStartTime = performance.now();
 
           try {
@@ -167,68 +270,48 @@ const app = new Elysia()
               return {
                 success: false,
                 targetServer: env.TARGET_BASE_URL,
-                error: "Invalid event type",
+                message: "Invalid event type",
                 timing: {
                   totalExecutionTime: parseFloat(totalTime.toFixed(2)),
                 },
               };
             }
 
-            // Transform data for lead update
-            const transformStartTime = performance.now();
-            const leadParams = transformToUpdateLead(event, env.TARGET_API_KEY);
-            const leadQueryString = buildQueryString(leadParams);
-            const leadUpdateUrl = `${endpoints.updateTicket}?${leadQueryString}`;
-            const transformTime = performance.now() - transformStartTime;
-
-            // Forward to external API
-            const leadResult = await makeHttpRequest(leadUpdateUrl, {
-              method: "POST",
-            });
-
+            // Add job to queue
+            const job = await ticketUpdatedQueue.add(
+              "process-ticket-updated",
+              event
+            );
             const totalTime = performance.now() - operationStartTime;
 
-            logger.info("leadResult", {
-              ...leadResult,
+            logger.info("Successfully queued ticket.updated event", {
+              jobId: job.id,
+              ticketId: event.data.id,
               timing: {
-                transformTime: parseFloat(transformTime.toFixed(2)),
-                httpRequestTime: leadResult.executionTime,
                 totalTime: parseFloat(totalTime.toFixed(2)),
-              },
-            });
-
-            const results = {
-              leadUpdate: leadResult,
-            };
-
-            logger.info("Ticket update results", {
-              ...results,
-              timing: {
-                dataTransformationTime: parseFloat(transformTime.toFixed(2)),
-                externalApiCallTime: leadResult.executionTime,
-                totalExecutionTime: parseFloat(totalTime.toFixed(2)),
               },
             });
 
             return {
               success: true,
+              message: "Event queued for processing",
+              jobId: job.id,
               targetServer: env.TARGET_BASE_URL,
-              message: "Event processed",
-              ticketId: event.data.id,
-              results,
               timing: {
-                dataTransformationTime: parseFloat(transformTime.toFixed(2)),
-                externalApiCallTime: leadResult.executionTime,
                 totalExecutionTime: parseFloat(totalTime.toFixed(2)),
               },
+              details: {
+                ticketId: event.data.id,
+              },
+
             };
           } catch (error) {
             const totalTime = performance.now() - operationStartTime;
-            logger.error("Error processing ticket.updated event", error);
+            logger.error("Error queuing ticket.updated event", error);
             return {
               success: false,
               targetServer: env.TARGET_BASE_URL,
-              error: error instanceof Error ? error.message : "Unknown error",
+              message: error instanceof Error ? error.message : "Unknown error",
               timing: {
                 totalExecutionTime: parseFloat(totalTime.toFixed(2)),
               },
@@ -245,11 +328,75 @@ const app = new Elysia()
               changes: t.Optional(t.Any()),
             }),
           }),
+          detail: {
+            tags: ["Webhooks"],
+            summary: "Process Ticket Updated Event",
+            description:
+              "Receives and queues ticket.updated webhook events from Digishare for asynchronous processing",
+            security: [{ "API Key": [] }],
+            responses: {
+              200: {
+                description: "Event successfully queued",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      properties: {
+                        success: { type: "boolean" },
+                        message: { type: "string" },
+                        jobId: { type: "string" },
+                        ticketId: { type: "string" },
+                        targetServer: { type: "string" },
+                        timing: {
+                          type: "object",
+                          properties: {
+                            totalExecutionTime: { type: "number" },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              400: {
+                description: "Invalid event type or request",
+              },
+              401: {
+                description: "Unauthorized - Invalid API key",
+              },
+            },
+          },
         }
       )
   )
+
   .listen(parseInt(env.PORT));
 
 logger.info(
   `🦊 Digishare API Bridge is running at http://localhost:${env.PORT}`
 );
+
+// Graceful shutdown handling
+process.on("SIGINT", async () => {
+  logger.info("Received SIGINT, shutting down gracefully...");
+  try {
+    // Shutdown webhook queues
+    await shutdownWebhookQueues();
+    process.exit(0);
+  } catch (error) {
+    logger.error("Error during graceful shutdown", error);
+    process.exit(1);
+  }
+});
+
+process.on("SIGTERM", async () => {
+  logger.info("Received SIGTERM, shutting down gracefully...");
+  try {
+    // Shutdown webhook queues
+    await shutdownWebhookQueues();
+    process.exit(0);
+  } catch (error) {
+    logger.error("Error during graceful shutdown", error);
+    process.exit(1);
+  }
+});
