@@ -10,7 +10,7 @@ function getName(third: any): string {
 }
 
 function getPhone(third: any): string {
-    return third.wa_id || third.mobile || third.phone || '';
+    return third.wa_id ?? third.mobile ?? third.phone ?? 'NA';
 }
 
 
