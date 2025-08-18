@@ -1,6 +1,6 @@
 import {DigishareTicketCreatedEvent, DigishareTicketData, DigishareTicketUpdatedEvent,} from "./core/types";
 import type {CreateLeadParams, UpdateLeadParams,} from "./types";
-import _ from 'lodash';
+import {objectToSimpleYaml} from "./core/utils";
 
 function getName(third: any,info:any): string {
     if (third.name) return third.name;
@@ -83,7 +83,7 @@ function buildParams(digishareTicket: DigishareTicketData, apiKey: string, isUpd
         Ville: info.ville || '',
         Nature: info.nature || '',
         typologie: getTypologie(info),
-        budget: getBudget(info),
+        // budget: getBudget(info),
         localisation: info.localisation || '',
         // deuxieme_tel: '',
         surface: info.surface || '',
@@ -110,23 +110,40 @@ export function buildQueryString(params: Record<string, any>): string {
     return searchParams.toString();
 }
 
-
-function collectUnusedInfoAsYaml(info: any): string {
-    const source = _.get(info, 'source', {});
-    const sourceData = _.pickBy(source, _.identity);
-    const additionalData = _.pickBy({
-        responses: info.responses,
-        lead: info.third,
-        // source:info.source
-    }, _.identity);
-    const data = _.merge(sourceData, additionalData);
-
-    const yamlLines = _.map(data, (value, key) => {
-        if (_.isObject(value)) {
-            return `${key}: ${JSON.stringify(value)}`;
+function collectUnusedInfoAsYaml(info:any) {
+    // Helper to filter out empty/null values, replacing _.pickBy
+    const filterEmptyValues = (obj:any) => {
+        const newObj:Record<string, any> = {};
+        for (const [key, value] of Object.entries(obj)) {
+            if (value !== null && value !== undefined && value !== '') {
+                newObj[key] = value;
+            }
         }
-        return `${key}: ${value}`;
+        return newObj;
+    };
+
+    // Safely get source data, replacing _.get
+    const sourceData = filterEmptyValues(info?.source ?? {});
+
+    // Gather additional data
+    const additionalData = filterEmptyValues({
+        responses: info?.responses,
+        lead: info?.third,
+        // Assuming getTypologie and getBudget are available
+        typologie: getTypologie(info),
+        budget: getBudget(info),
     });
 
-    return yamlLines.length > 0 ? yamlLines.join(' | ') : '';
+    // Combine data using spread syntax, replacing _.merge
+    const dataToInclude = { ...sourceData, ...additionalData };
+
+    if (Object.keys(dataToInclude).length === 0) {
+        return '';
+    }
+
+    // Convert the final object to a YAML string using our manual function
+    const yamlString = objectToSimpleYaml(dataToInclude);
+
+    // Wrap in HTML tags for display
+    return `<pre><code>${yamlString}</code></pre>`;
 }
