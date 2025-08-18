@@ -1,4 +1,4 @@
-import type {DigishareTicketCreatedEvent, DigishareTicketUpdatedEvent,} from "./core/types";
+import {DigishareTicketCreatedEvent, DigishareTicketData, DigishareTicketUpdatedEvent,} from "./core/types";
 import type {CreateLeadParams, UpdateLeadParams,} from "./types";
 import _ from 'lodash';
 
@@ -16,30 +16,65 @@ function getPhone(third: any,info:any): string {
 }
 
 
-function getDate(ticketData: any, useUpdated = false): string {
-    return ticketData.demand_date || (useUpdated ? ticketData.updated_at : ticketData.created_at) || new Date().toISOString();
+function getDate(digishareTicket: DigishareTicketData, useUpdated = false): string {
+    return digishareTicket.demand_date || (useUpdated ? digishareTicket.updated_at : digishareTicket.created_at) || new Date().toISOString();
 }
 
 
-function buildParams(ticketData: any, apiKey: string, isUpdate = false): any {
-    const info = ticketData.information || {};
+function getEmail(third: any, info: any): string {
+    return third.email || info.responses?.e_mail || '';
+}
+
+function getBudget(info: any): string {
+    return info.responses?.budget || info.budget || '';
+}
+
+function getTypologie(info: any): string {
+    const typologie = info.typologie || info.responses?.type_de_bien || info.responses?.nombre_de_chambres || '';
+
+    const typologieMap: Record<string, string> = {
+        'studio': 'studio',
+        'appartement_2_chambres': '2_chambres',
+        'appartement_3_chambres': '3_chambres',
+        '2_chambres': '2_chambres',
+        '3_chambres': '3_chambres',
+        'f3': '3_chambres'
+    };
+
+    return typologieMap[typologie] || typologie;
+}
+
+function getSource(info: any): string {
+    const utmSource = info.utm_source;
+    const platform = info.source?.platform;
+
+    if (platform === 'facebook') return 'Formulaire Facebook';
+    if (utmSource === 'ig') return 'Formulaire Instagram';
+    if (utmSource === 'hespress') return 'Formulaire Hespress';
+    if (utmSource === 'direct') return 'Direct';
+
+    return utmSource || platform || 'Formulaire Facebook-ig';
+}
+
+function buildParams(digishareTicket: DigishareTicketData, apiKey: string, isUpdate = false): any {
+    const info = digishareTicket.information || {};
     const third = info.third || {};
     const unusedInfo = collectUnusedInfoAsYaml(info);
-    let comment = ticketData.comment || `Lead ${isUpdate ? 'updated' : 'created'} via Digishare`;
+    let comment = digishareTicket.comment || `Lead ${isUpdate ? 'updated' : 'created'} via Digishare`;
     if (unusedInfo) comment += ` | ${unusedInfo}`;
     return {
         key: apiKey,
-        Source: `Formulaire Facebook-ig`,
-        Utm_source: 'Formulaire Facebook-ig',
-        Name: getName(third,info),
-        Phone: getPhone(info,info),
-        IdProjet: info.id_projet,
-        IdLead: ticketData.id,
-        DateLead: getDate(ticketData, isUpdate),
+        Source: getSource(info),
+        Utm_source: getSource(info),
+        Name: getName(third, info),
+        Phone: getPhone(third, info),
+        IdProjet: info.id_projet || '',
+        IdLead: info.third?.leadId || info.id_lead || digishareTicket.id || '',
+        DateLead: getDate(digishareTicket, isUpdate),
 
-        Email: third.email || '',
+        Email: getEmail(third, info),
         Comment: comment,
-        langue: info.langue || ticketData.lang || third.lang || 'fr',
+        langue: info.langue || digishareTicket.lang || third.lang || 'fr',
         Utm_Compagne: info.utm_campaign || '',
         Utm_content: info.utm_content || '',
         Utm_medium: info.utm_medium || '',
@@ -47,8 +82,8 @@ function buildParams(ticketData: any, apiKey: string, isUpdate = false): any {
         Compagne_id: info.campaign_id || '',
         Ville: info.ville || '',
         Nature: info.nature || '',
-        typologie: info.typologie || '',
-        budget: info.budget || '',
+        typologie: getTypologie(info),
+        budget: getBudget(info),
         localisation: info.localisation || '',
         // deuxieme_tel: '',
         surface: info.surface || '',
@@ -81,16 +116,17 @@ function collectUnusedInfoAsYaml(info: any): string {
     const sourceData = _.pickBy(source, _.identity);
     const additionalData = _.pickBy({
         responses: info.responses,
-        lead: info.third
+        lead: info.third,
+        // source:info.source
     }, _.identity);
     const data = _.merge(sourceData, additionalData);
 
     const yamlLines = _.map(data, (value, key) => {
         if (_.isObject(value)) {
-            return `${key}:\n  ${JSON.stringify(value)}`;
+            return `${key}: ${JSON.stringify(value)}`;
         }
         return `${key}: ${value}`;
     });
 
-    return yamlLines.join('\n');
+    return yamlLines.length > 0 ? yamlLines.join(' | ') : '';
 }
