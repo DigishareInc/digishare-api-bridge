@@ -2,16 +2,17 @@ import type {DigishareTicketCreatedEvent, DigishareTicketUpdatedEvent,} from "./
 import type {CreateLeadParams, UpdateLeadParams,} from "./types";
 import _ from 'lodash';
 
-function getName(third: any): string {
+function getName(third: any,info:any): string {
     if (third.name) return third.name;
     if (third.first_name && third.last_name) return `${third.first_name} ${third.last_name}`;
     if (third.first_name || third.last_name) return third.first_name || third.last_name;
+    if (info.responses?.nom_complet) return info.responses.nom_complet;
     if (third.email) return third.email.split('@')[0];
     return 'Unknown Lead';
 }
 
-function getPhone(third: any): string {
-    return third.wa_id ?? third.mobile ?? third.phone ?? 'NA';
+function getPhone(third: any,info:any): string {
+    return third.wa_id ?? third.mobile ?? third.phone?? info.responses?.t_l_phone ?? 'NA';
 }
 
 
@@ -30,8 +31,8 @@ function buildParams(ticketData: any, apiKey: string, isUpdate = false): any {
         key: apiKey,
         Source: `Formulaire Facebook-ig`,
         Utm_source: 'Formulaire Facebook-ig',
-        Name: getName(third),
-        Phone: getPhone(third),
+        Name: getName(third,info),
+        Phone: getPhone(info,info),
         IdProjet: info.id_projet,
         IdLead: ticketData.id,
         DateLead: getDate(ticketData, isUpdate),
