@@ -1,5 +1,6 @@
 import type {DigishareTicketCreatedEvent, DigishareTicketUpdatedEvent,} from "./core/types";
 import type {CreateLeadParams, UpdateLeadParams,} from "./types";
+import _ from 'lodash';
 
 function getName(third: any): string {
     if (third.name) return third.name;
@@ -22,11 +23,9 @@ function getDate(ticketData: any, useUpdated = false): string {
 function buildParams(ticketData: any, apiKey: string, isUpdate = false): any {
     const info = ticketData.information || {};
     const third = info.third || {};
-    const unusedInfo = collectUnusedInfoAsText(info);
+    const unusedInfo = collectUnusedInfoAsYaml(info);
     let comment = ticketData.comment || `Lead ${isUpdate ? 'updated' : 'created'} via Digishare`;
     if (unusedInfo) comment += ` | ${unusedInfo}`;
-    // lead create in CRM GCIMMO essentials
-    // datelead (format validation)
     return {
         key: apiKey,
         Source: `Formulaire Facebook-ig`,
@@ -75,17 +74,22 @@ export function buildQueryString(params: Record<string, any>): string {
     return searchParams.toString();
 }
 
-function collectUnusedInfoAsText(info: any): string {
-    const source = info.source || {};
-    const data: string[] = [];
 
-    if (source.ad_id) data.push(`ad_id:${source.ad_id}`);
-    if (source.form_id) data.push(`form_id:${source.form_id}`);
-    if (source.page_id) data.push(`page_id:${source.page_id}`);
-    if (source.platform) data.push(`platform:${source.platform}`);
-    if (source.adgroup_id) data.push(`adgroup_id:${source.adgroup_id}`);
-    if (source.collected_at) data.push(`collected_at:${source.collected_at}`);
-    if (info.__schema?.length) data.push(`schema:${JSON.stringify(info.__schema)}`);
+function collectUnusedInfoAsYaml(info: any): string {
+    const source = _.get(info, 'source', {});
+    const sourceData = _.pickBy(source, _.identity);
+    const additionalData = _.pickBy({
+        responses: info.responses,
+        lead: info.third
+    }, _.identity);
+    const data = _.merge(sourceData, additionalData);
 
-    return data.join(' | ');
+    const yamlLines = _.map(data, (value, key) => {
+        if (_.isObject(value)) {
+            return `${key}:\n  ${JSON.stringify(value)}`;
+        }
+        return `${key}: ${value}`;
+    });
+
+    return yamlLines.join('\n');
 }
