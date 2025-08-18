@@ -22,13 +22,10 @@ const logger = {
 // Request logging middleware with timing
 export const requestLogger = (app: Elysia) =>
   app
-    .onRequest(({ request, store }) => {
-      const url = new URL(request.url);
-      // Store request start time
+    .onRequest(({  store }) => {
       (store as any).requestStartTime = performance.now();
-      logger.info(`${request.method} ${url.pathname} - Request started`);
     })
-    .onAfterHandle(({ request, store, response }) => {
+    .onAfterHandle(({ request, store }) => {
       const url = new URL(request.url);
       const startTime = (store as any).requestStartTime;
       if (startTime) {
