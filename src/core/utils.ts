@@ -1,40 +1,40 @@
 import { logger } from "./middleware";
 
 // Timing utilities
-// export class Timer {
-//   private startTime: number;
-//
-//   constructor() {
-//     this.startTime = performance.now();
-//   }
-//
-//   elapsed(): number {
-//     return parseFloat((performance.now() - this.startTime).toFixed(2));
-//   }
-//
-//   reset(): void {
-//     this.startTime = performance.now();
-//   }
-//
-//   static measure<T>(
-//     operation: () => T | Promise<T>
-//   ): Promise<{ result: T; executionTime: number }> {
-//     const startTime = performance.now();
-//     const result = operation();
-//
-//     if (result instanceof Promise) {
-//       return result.then((res) => ({
-//         result: res,
-//         executionTime: parseFloat((performance.now() - startTime).toFixed(2)),
-//       }));
-//     }
-//
-//     return Promise.resolve({
-//       result,
-//       executionTime: parseFloat((performance.now() - startTime).toFixed(2)),
-//     });
-//   }
-// }
+export class Timer {
+  private startTime: number;
+
+  constructor() {
+    this.startTime = performance.now();
+  }
+
+  elapsed(): number {
+    return parseFloat((performance.now() - this.startTime).toFixed(2));
+  }
+
+  reset(): void {
+    this.startTime = performance.now();
+  }
+
+  static measure<T>(
+    operation: () => T | Promise<T>
+  ): Promise<{ result: T; executionTime: number }> {
+    const startTime = performance.now();
+    const result = operation();
+
+    if (result instanceof Promise) {
+      return result.then((res) => ({
+        result: res,
+        executionTime: parseFloat((performance.now() - startTime).toFixed(2)),
+      }));
+    }
+
+    return Promise.resolve({
+      result,
+      executionTime: parseFloat((performance.now() - startTime).toFixed(2)),
+    });
+  }
+}
 
 // HTTP client utility
 export async function makeHttpRequest(
