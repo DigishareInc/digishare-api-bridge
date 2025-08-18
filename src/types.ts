@@ -5,8 +5,11 @@ export interface CreateLeadParams {
   Phone: string;
   IdProjet: string;
   IdLead: string;
-  Email?: string;
   Source: string;
+  Utm_source: string;
+  DateLead: string;
+  // Optional fields
+  Email?: string;
   Comment?: string;
   Utm_Compagne?: string;
   Utm_content?: string;
@@ -15,8 +18,6 @@ export interface CreateLeadParams {
   Compagne_id?: string;
   Ville?: string;
   Nature?: string;
-  Utm_source?: string;
-  DateLead?: string;
   typologie?: string;
   budget?: string;
   langue?: string;
