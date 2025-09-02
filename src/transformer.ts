@@ -12,7 +12,7 @@ function getName(third: any,info:any): string {
 }
 
 function getPhone(third: any,info:any): string {
-    return third.wa_id ?? third.mobile ?? third.phone?? info.responses?.t_l_phone ?? 'NA';
+    return third.wa_id || third.mobile || third.phone || info.responses?.t_l_phone || 'NA';
 }
 
 
