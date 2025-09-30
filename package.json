@@ -21,8 +21,8 @@
   "dependencies": {
     "@elysiajs/swagger": "^1.3.1",
     "@types/lodash": "^4.17.20",
-    "@types/node": "^24.3.0",
-    "elysia": "^1.3.21",
+    "@types/node": "^24.6.0",
+    "elysia": "^1.4.9",
     "elysia-hybrid-queue": "file:./packages/elysia-hybrid-queue",
     "hybrid-queue": "file:./packages/hybrid-queue",
     "lodash": "^4.17.21",

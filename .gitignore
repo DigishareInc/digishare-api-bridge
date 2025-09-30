@@ -37,3 +37,6 @@ jspm_packages/
 # data
 queue.sqlite
 /bun.lock
+
+# editor directories and files
+.idea/
