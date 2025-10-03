@@ -67,7 +67,7 @@ function buildParams(digishareTicket: DigishareTicketData, apiKey: string, isUpd
         Source: getSource(info),
         Utm_source: getSource(info),
         Name: getName(third, info),
-        Phone: getPhone(third, info)??'NA',
+        Phone: getPhone(third, info),
         IdProjet: info.id_projet || '',
         IdLead: info.third?.leadId || info.id_lead || digishareTicket.id || '',
         DateLead: getDate(digishareTicket, isUpdate),
@@ -178,7 +178,7 @@ export function cast(value: any, type: string): any {
 export function buildQueryString(params: Record<string, any>): string {
     const searchParams = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => {
-        if (value !== undefined && value !== null && value !== "") {
+        if (value !== undefined && value !== null) {
             searchParams.append(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
         }
     });
