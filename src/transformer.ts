@@ -67,7 +67,7 @@ function buildParams(digishareTicket: DigishareTicketData, apiKey: string, isUpd
         Source: getSource(info),
         Utm_source: getSource(info),
         Name: getName(third, info),
-        Phone: getPhone(third, info),
+        Phone: getPhone(third, info)??'NA',
         IdProjet: info.id_projet || '',
         IdLead: info.third?.leadId || info.id_lead || digishareTicket.id || '',
         DateLead: getDate(digishareTicket, isUpdate),
@@ -98,6 +98,81 @@ export function transformToCreateLead(event: DigishareTicketCreatedEvent, apiKey
 export function transformToUpdateLead(event: DigishareTicketUpdatedEvent, apiKey: string): UpdateLeadParams {
     if (!apiKey || !event.data?.data) throw new Error('Missing required data');
     return buildParams(event.data.data, apiKey, true);
+}
+export function transformToActionRappel(event:DigishareTicketUpdatedEvent, apiKey:string) {
+    if (!apiKey || !event.data?.data) throw new Error('Missing required data');
+    const digishareTicket = event.data.data;
+    const info = digishareTicket.information || {};
+    return {
+        key: Bun.env.API_KEY_P2,
+        IdBesoin: info.IdBesoin ?? info.id_lead  ?? info.lead_id ,
+        DatePlanification: cast(info.selected_time_slot,'slot_to_date'),
+        observation: cast(info.selected_time_slot,'slot_to_fr_string'),
+        Priorite: cast( digishareTicket.priority_id,'priority'),
+    }
+}
+
+export function cast(value: any, type: string): any {
+    switch (type) {
+        case 'slot_to_date': {
+            const [fromHour, toHour] = value.split('_').map(Number);
+            const now = new Date();
+            const currentTimeInMinutes = now.getHours() * 60 + now.getMinutes();
+            const slotEndMinusBuffer = toHour * 60 - 25;
+
+            const resultDate = new Date();
+            resultDate.setHours(fromHour === 9 ? 9 : fromHour, fromHour === 9 ? 30 : 0, 0, 0);
+
+            if (currentTimeInMinutes >= slotEndMinusBuffer) {
+                resultDate.setDate(resultDate.getDate() + 1);
+            }
+
+            // Use toISOString and replace 'T' with space, remove 'Z'
+            return resultDate.toISOString().replace('T', ' ').replace('Z', '');
+        }
+
+        case 'slot_to_fr_string': {
+            const [fromHour, toHour] = value.split('_').map(Number);
+            const fromStr = fromHour === 9 ? '09h30' : `${fromHour}h`;
+            const toStr = `${toHour}h`;
+            return `${fromStr} à ${toStr}`;
+        }
+
+        case 'priority': {
+            const PRIORITY_MAP: Record<number, number> = {
+                1: 1, // Low -> Faible
+                2: 2, // Normal -> Normal
+                3: 2, // Moderate -> Normal
+                4: 3, // High -> High
+                5: 3, // Urgent -> High
+            };
+
+            const NAME_TO_PRIORITY: Record<string, number> = {
+                Low: 1,
+                Normal: 2,
+                Moderate: 2,
+                High: 3,
+                Urgent: 3,
+            };
+
+            if (typeof value === 'object' && value?.id) {
+                return PRIORITY_MAP[value.id] ?? -1;
+            }
+
+            if (typeof value === 'number') {
+                return PRIORITY_MAP[value] ?? -1;
+            }
+
+            if (typeof value === 'string') {
+                return NAME_TO_PRIORITY[value] ?? -1;
+            }
+
+            return -1; // NonSpecifie as default
+        }
+
+        default:
+            return value;
+    }
 }
 
 export function buildQueryString(params: Record<string, any>): string {

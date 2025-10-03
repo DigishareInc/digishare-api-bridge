@@ -1,8 +1,9 @@
 import { Queue, Worker, type JobHandler } from "elysia-hybrid-queue";
 import {
-  transformToCreateLead,
-  transformToUpdateLead,
-  buildQueryString,
+    transformToCreateLead,
+    transformToUpdateLead,
+    buildQueryString,
+    transformToActionRappel,
 } from "../transformer";
 import {
   DigishareTicketCreatedEvent,
@@ -11,11 +12,13 @@ import {
 import { makeHttpRequest } from "../core/utils";
 import { env } from "../core/config";
 import { logger } from "../core/middleware";
+import {UpdateLeadParams} from "../types";
 
 const endpoints = {
   createTicket: `${env.TARGET_BASE_URL}/Api/Leads/CreateNewLead`,
   updateTicket: `${env.TARGET_BASE_URL}/Api/Leads/UpdateLead`,
   updateConversation: `${env.TARGET_BASE_URL}/Api/Conversations/UpdateConversation`,
+  createActionRappel: `${env.TARGET_BASE_URL}/Api/CreateActionRappel/ActionRappel`,
 };
 
 // Queue instances
@@ -94,7 +97,7 @@ const handleTicketUpdated: JobHandler<DigishareTicketUpdatedEvent> = async (job)
   const operationStartTime = performance.now();
   
   try {
-    const event = job.data;
+    const event:DigishareTicketUpdatedEvent = job.data;
     logger.info("Processing ticket.updated job", {
       jobId: job.id,
       ticketId: event.data.id,
@@ -107,9 +110,19 @@ const handleTicketUpdated: JobHandler<DigishareTicketUpdatedEvent> = async (job)
 
     // Transform data for lead update
     const transformStartTime = performance.now();
-    const leadParams = transformToUpdateLead(event, env.TARGET_API_KEY);
+      // check if the ticket is a lead_qualification ticket
+      let leadParams:Partial<UpdateLeadParams>
+      let url :string
+      if(event?.data?.data?.information?.selected_time_slot){
+          leadParams = transformToActionRappel(event, env.TARGET_API_KEY);
+          url = endpoints.createActionRappel;
+      }else{
+          leadParams = transformToUpdateLead(event, env.TARGET_API_KEY);
+          url = endpoints.updateTicket;
+      }
+
     const leadQueryString = buildQueryString(leadParams);
-    const leadUpdateUrl = `${endpoints.updateTicket}?${leadQueryString}`;
+    const leadUpdateUrl = `${url}?${leadQueryString}`;
     const transformTime = performance.now() - transformStartTime;
 
     // Forward to external API
@@ -119,7 +132,7 @@ const handleTicketUpdated: JobHandler<DigishareTicketUpdatedEvent> = async (job)
 
     const totalTime = performance.now() - operationStartTime;
 
-    if (leadResult.success) {
+    if (leadResult.success && !leadResult.error) {
       logger.info("Successfully processed ticket.updated job", {
         jobId: job.id,
         ticketId: event.data.id,
