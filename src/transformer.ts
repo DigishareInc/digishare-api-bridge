@@ -104,7 +104,7 @@ export function transformToActionRappel(event:DigishareTicketUpdatedEvent, apiKe
     const digishareTicket = event.data.data;
     const info = digishareTicket.information || {};
     return {
-        key: Bun.env.API_KEY_P2,
+        key: Bun.env.TARGET_API_KEY2,
         IdBesoin: info.IdBesoin ?? info.id_lead  ?? info.lead_id ,
         DatePlanification: cast(info.selected_time_slot,'slot_to_date'),
         observation: cast(info.selected_time_slot,'slot_to_fr_string'),
