@@ -18,7 +18,7 @@ const endpoints = {
   createTicket: `${env.TARGET_BASE_URL}/Api/Leads/CreateNewLead`,
   updateTicket: `${env.TARGET_BASE_URL}/Api/Leads/UpdateLead`,
   updateConversation: `${env.TARGET_BASE_URL}/Api/Conversations/UpdateConversation`,
-  createActionRappel: `${env.TARGET_BASE_URL}/Api/CreateActionRappel/ActionRappel`,
+  createActionRappel: `${Bun.env.TARGET_BASE_URL2}/Api/CreateActionRappel/ActionRappel`,
 };
 
 // Queue instances

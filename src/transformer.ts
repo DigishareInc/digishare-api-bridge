@@ -127,8 +127,9 @@ export function cast(value: any, type: string): any {
                 resultDate.setDate(resultDate.getDate() + 1);
             }
 
-            // Use toISOString and replace 'T' with space, remove 'Z'
-            return resultDate.toISOString().replace('T', ' ').replace('Z', '');
+            let iso = resultDate.toISOString();
+            iso = iso.replace('.000Z', '.000000Z');
+            return iso;
         }
 
         case 'slot_to_fr_string': {
