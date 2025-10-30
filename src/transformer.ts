@@ -71,6 +71,7 @@ function buildParams(digishareTicket: DigishareTicketData, apiKey: string, isUpd
         IdProjet: info.id_projet || '',
         IdLead: info.third?.leadId || info.id_lead || digishareTicket.id || '',
         DateLead: getDate(digishareTicket, isUpdate),
+        Priorite: cast( digishareTicket.priority_id,'priority'),
 
         Email: getEmail(third, info),
         Comment: comment,
