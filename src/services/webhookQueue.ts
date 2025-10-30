@@ -1,7 +1,7 @@
 import { Queue, Worker, type JobHandler } from "elysia-hybrid-queue";
 import {
     transformToCreateLead,
-    transformToUpdateLead,
+    // transformToUpdateLead,
     buildQueryString,
     transformToActionRappel,
 } from "../transformer";
@@ -18,7 +18,7 @@ const endpoints = {
   createTicket: `${env.TARGET_BASE_URL}/Api/Leads/CreateNewLead`,
   updateTicket: `${env.TARGET_BASE_URL}/Api/Leads/UpdateLead`,
   updateConversation: `${env.TARGET_BASE_URL}/Api/Conversations/UpdateConversation`,
-  createActionRappel: `${Bun.env.TARGET_BASE_URL2}/Api/CreateActionRappel/ActionRappel`,
+  createActionRappel: `${Bun.env.TARGET_BASE_URL}/Api/CreateActionRappel/ActionRappel`,
 };
 
 // Queue instances
@@ -44,6 +44,11 @@ const handleTicketCreated: JobHandler<DigishareTicketCreatedEvent> = async (job)
     // Transform data
     const transformStartTime = performance.now();
     const leadParams = transformToCreateLead(event, env.TARGET_API_KEY);
+    if(!leadParams.IdProjet){
+      console.log('skipped by empty IdProjet',leadParams);
+      return;
+    }
+
     const queryString = buildQueryString(leadParams);
     const transformTime = performance.now() - transformStartTime;
 
@@ -117,8 +122,11 @@ const handleTicketUpdated: JobHandler<DigishareTicketUpdatedEvent> = async (job)
           leadParams = transformToActionRappel(event, env.TARGET_API_KEY);
           url = endpoints.createActionRappel;
       }else{
-          leadParams = transformToUpdateLead(event, env.TARGET_API_KEY);
-          url = endpoints.updateTicket;
+        console.log('skipped by update lead',event?.data.id);
+        // skip the update lead
+        return;
+          // leadParams = transformToUpdateLead(event, env.TARGET_API_KEY);
+          // url = endpoints.updateTicket;
       }
 
     const leadQueryString = buildQueryString(leadParams);
