@@ -61,6 +61,10 @@ function buildParams(digishareTicket: DigishareTicketData, apiKey: string, isUpd
     const third = info.third || {};
     const unusedInfo = collectUnusedInfoAsYaml(info);
     let comment = digishareTicket.comment || `Lead ${isUpdate ? 'updated' : 'created'} via Digishare`;
+    // add conversation link to comment if available
+    if (digishareTicket.conversation_id) {
+        comment += ` | Conversation: https://app.digishare.ma/chats/${digishareTicket.conversation_id}`;
+    }
     if (unusedInfo) comment += ` | ${unusedInfo}`;
     return {
         key: apiKey,
