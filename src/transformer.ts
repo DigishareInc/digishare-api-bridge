@@ -45,7 +45,7 @@ function getTypologie(info: any): string {
 }
 
 function getSource(info: any): string {
-    const utmSource = info.utm_source;
+    const utmSource = info.utm_source?? info.tracking?.utm_source;
     const platform = info.source?.platform;
 
     if (platform === 'facebook') return 'Formulaire Facebook';
