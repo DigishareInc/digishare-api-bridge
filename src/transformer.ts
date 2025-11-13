@@ -53,7 +53,7 @@ function getSource(info: any): string {
     if (utmSource === 'hespress') return 'Formulaire Hespress';
     if (utmSource === 'direct') return 'Direct';
 
-    return utmSource || platform ||  info.utm_source || null;
+    return utmSource || platform || 'Unknown';
 }
 
 function buildParams(digishareTicket: DigishareTicketData, apiKey: string, isUpdate = false): any {
